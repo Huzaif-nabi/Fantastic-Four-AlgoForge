@@ -1,164 +1,133 @@
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { BarChart2, AlertTriangle } from "lucide-react";
+import { StockData } from "@/services/stockApi";
 
-import { useEffect, useState } from 'react';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { Shield, AlertTriangle, Info } from 'lucide-react';
+interface Investment {
+  symbol: string;
+  name: string;
+  shares: number;
+  purchasePrice: number;
+  purchaseDate: string;
+}
 
-const RiskAssessment = () => {
-  const [loading, setLoading] = useState(true);
-  const [simulationData, setSimulationData] = useState<any[]>([]);
-  const [selectedTab, setSelectedTab] = useState<'risk' | 'return'>('risk');
-  
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      generateSimulationData();
-      setLoading(false);
-    }, 1800);
-    
-    return () => clearTimeout(timer);
-  }, []);
-  
-  const generateSimulationData = () => {
-    // Generate risk simulation data
-    // This represents probability distribution of potential returns
-    const data = [];
-    
-    // Generate a somewhat normal distribution
-    for (let i = -30; i <= 50; i += 5) {
-      // Center the peak around 10% returns
-      const probability = Math.exp(-Math.pow(i - 10, 2) / 450) * 100;
+interface RiskAssessmentProps {
+  investments: Investment[];
+  stockData: Record<string, StockData>;
+}
+
+const RiskAssessment = ({ investments, stockData }: RiskAssessmentProps) => {
+  // Calculate portfolio risk score based on volatility
+  const calculateRiskScore = () => {
+    if (investments.length === 0) return 50;
+
+    const totalValue = investments.reduce((total, investment) => {
+      const currentPrice = stockData[investment.symbol]?.price || 0;
+      return total + (currentPrice * investment.shares);
+    }, 0);
+
+    // Calculate weighted average volatility
+    const weightedVolatility = investments.reduce((total, investment) => {
+      const currentPrice = stockData[investment.symbol]?.price || 0;
+      const positionValue = currentPrice * investment.shares;
+      const weight = positionValue / totalValue;
       
-      data.push({
-        return: i,
-        probability: probability.toFixed(2),
-      });
-    }
-    
-    setSimulationData(data);
+      // Use price change as a proxy for volatility
+      const priceChange = Math.abs(stockData[investment.symbol]?.changePercent || 0);
+      return total + (weight * priceChange);
+    }, 0);
+
+    // Convert volatility to risk score (0-100)
+    // Higher volatility = higher risk score
+    const riskScore = Math.min(Math.max(weightedVolatility * 2, 0), 100);
+    return Math.round(riskScore);
   };
-  
+
+  // Determine risk level based on score
+  const getRiskLevel = (score: number): 'Low' | 'Moderate' | 'High' => {
+    if (score < 40) return 'Low';
+    if (score < 70) return 'Moderate';
+    return 'High';
+  };
+
+  // Calculate diversification score
+  const calculateDiversificationScore = () => {
+    if (investments.length === 0) return 0;
+    
+    // More holdings = better diversification
+    const holdingsScore = Math.min(investments.length * 10, 50);
+    
+    // Calculate sector concentration
+    const sectors = investments.reduce((acc, investment) => {
+      const sector = stockData[investment.symbol]?.sector || 'Unknown';
+      acc[sector] = (acc[sector] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const sectorCount = Object.keys(sectors).length;
+    const sectorScore = Math.min(sectorCount * 10, 50);
+
+    return Math.round(holdingsScore + sectorScore);
+  };
+
+  const riskScore = calculateRiskScore();
+  const riskLevel = getRiskLevel(riskScore);
+  const diversificationScore = calculateDiversificationScore();
+
   return (
-    <Card className="border border-gray-200 dark:border-gray-800 h-full hover:shadow-md transition-shadow duration-300">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between">
-          <div>
-            <CardDescription className="flex items-center">
-              <Shield className="mr-2 h-4 w-4 text-gray-500" />
-              Risk Assessment
-            </CardDescription>
-            <CardTitle className="flex items-center">
-              Monte Carlo Simulation
-              <Info className="ml-2 h-4 w-4 text-gray-400 cursor-help" />
-            </CardTitle>
-          </div>
-          
-          <div className="flex space-x-1">
-            <Button
-              variant={selectedTab === 'risk' ? "default" : "outline"}
-              className={`h-8 px-3 text-xs ${
-                selectedTab === 'risk' 
-                  ? 'bg-finance-blue text-white dark:bg-finance-teal' 
-                  : 'text-gray-500'
-              }`}
-              onClick={() => setSelectedTab('risk')}
-            >
-              Risk
-            </Button>
-            <Button
-              variant={selectedTab === 'return' ? "default" : "outline"}
-              className={`h-8 px-3 text-xs ${
-                selectedTab === 'return' 
-                  ? 'bg-finance-blue text-white dark:bg-finance-teal' 
-                  : 'text-gray-500'
-              }`}
-              onClick={() => setSelectedTab('return')}
-            >
-              Expected Return
-            </Button>
-          </div>
-        </div>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center">
+          <BarChart2 className="mr-2 h-5 w-5 text-finance-teal" />
+          Risk Assessment
+        </CardTitle>
       </CardHeader>
-      
-      <CardContent className="pt-4">
-        {loading ? (
-          <div className="h-64 w-full animate-pulse bg-gray-200 dark:bg-gray-800 rounded"></div>
-        ) : (
-          <>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart
-                  data={simulationData}
-                  margin={{ top: 10, right: 30, left: 0, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                  <XAxis 
-                    dataKey="return" 
-                    tickFormatter={(value) => `${value}%`}
-                    tick={{ fontSize: 12, fill: '#9CA3AF' }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis 
-                    tickFormatter={(value) => `${value.toFixed(0)}%`}
-                    tick={{ fontSize: 12, fill: '#9CA3AF' }}
-                    tickLine={false}
-                    axisLine={false}
-                    domain={[0, 'dataMax + 5']}
-                  />
-                  <Tooltip 
-                    formatter={(value, name) => [`${value}%`, "Probability"]}
-                    labelFormatter={(value) => `Return: ${value}%`}
-                    contentStyle={{ 
-                      backgroundColor: 'white', 
-                      borderRadius: '0.5rem',
-                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-                      border: '1px solid #E5E7EB'
-                    }}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="probability" 
-                    stroke="#0D9488" 
-                    fill="url(#colorGradient)" 
-                    fillOpacity={0.8}
-                  />
-                  <defs>
-                    <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0D9488" stopOpacity={0.8}/>
-                      <stop offset="95%" stopColor="#0D9488" stopOpacity={0.1}/>
-                    </linearGradient>
-                  </defs>
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-            
-            <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Potential Loss (5%)</div>
-                <div className="text-lg font-bold text-finance-negative">-8.2%</div>
-              </div>
-              
-              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Expected Return</div>
-                <div className="text-lg font-bold text-gray-900 dark:text-white">+10.4%</div>
-              </div>
-              
-              <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-                <div className="text-sm text-gray-500 dark:text-gray-400 mb-1">Potential Gain (95%)</div>
-                <div className="text-lg font-bold text-finance-positive">+28.7%</div>
-              </div>
-            </div>
-          </>
+      <CardContent className="space-y-6">
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-sm font-medium">Risk Level</span>
+            <span className={`text-sm px-2 py-1 rounded-full ${
+              riskLevel === 'Low' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+              riskLevel === 'Moderate' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+              'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+            }`}>
+              {riskLevel} ({riskScore}/100)
+            </span>
+          </div>
+          <Progress
+            value={riskScore}
+            className="h-2"
+            indicatorClassName={
+              riskLevel === 'Low' ? 'bg-finance-positive' :
+              riskLevel === 'Moderate' ? 'bg-yellow-500' :
+              'bg-finance-negative'
+            }
+          />
+        </div>
+
+        <div>
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-sm font-medium">Diversification</span>
+            <span className="text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+              {diversificationScore}/100
+            </span>
+          </div>
+          <Progress 
+            value={diversificationScore} 
+            className="h-2"
+            indicatorClassName="bg-finance-teal"
+          />
+        </div>
+
+        {riskLevel === 'High' && (
+          <div className="flex items-center p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <AlertTriangle className="h-5 w-5 text-red-500 mr-2" />
+            <p className="text-sm text-red-700 dark:text-red-300">
+              Your portfolio has a high risk level. Consider diversifying your investments to reduce risk.
+            </p>
+          </div>
         )}
       </CardContent>
-      
-      <CardFooter className="pt-0">
-        <div className="flex items-center text-sm text-amber-600 dark:text-amber-400 mt-2">
-          <AlertTriangle className="h-4 w-4 mr-1" />
-          <span>Past performance is not indicative of future results.</span>
-        </div>
-      </CardFooter>
     </Card>
   );
 };

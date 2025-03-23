@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react';
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
@@ -11,118 +10,111 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, BarChart2, TrendingUp, TrendingDown, Newspaper, Filter, RefreshCw, Clock, LayoutGrid, LayoutList } from 'lucide-react';
+import { newsApi, NewsItem, SentimentData } from '@/services/newsApi';
 
 const News = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [loading, setLoading] = useState(true);
-  const [sentimentData, setSentimentData] = useState({
-    positive: 62,
-    neutral: 28,
-    negative: 10,
-    overall: 'Bullish'
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
+  const [sentimentData, setSentimentData] = useState<SentimentData>({
+    positive: 0,
+    neutral: 0,
+    negative: 0,
+    overall: 'Neutral'
   });
+  const [trendingTopics, setTrendingTopics] = useState<Array<{ name: string; sentiment: string }>>([]);
+  const [timeFrame, setTimeFrame] = useState('24h');
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Fetch all news data in a single API call
+      const allData = await newsApi.fetchAllNewsData(searchQuery);
+      
+      setNewsItems(allData.news.articles);
+      setHasMore(allData.news.articles.length === 10);
+      setSentimentData(allData.sentiment);
+      setTrendingTopics(allData.trending);
+      
+      // Reset retry count on successful fetch
+      setRetryCount(0);
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch news data. Please try again later.');
+      console.error('Error fetching data:', err);
+      
+      // Increment retry count
+      setRetryCount(prev => prev + 1);
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
   
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setLoading(false);
-    }, 1500);
-    
-    return () => clearTimeout(timer);
-  }, []);
+    fetchData();
+  }, [timeFrame]);
   
-  // Mock news data
-  const newsItems = [
-    {
-      title: "Federal Reserve Signals Potential Rate Cut in Coming Months",
-      source: "Financial Times",
-      date: "2h ago",
-      summary: "The Federal Reserve has indicated it may begin cutting interest rates in the coming months amid signs of cooling inflation, according to the latest meeting minutes.",
-      url: "#",
-      sentiment: "positive" as const,
-      impact: "high" as const
-    },
-    {
-      title: "Tech Sector Leads Market Rally as AI Investments Surge",
-      source: "Bloomberg",
-      date: "5h ago",
-      summary: "Technology stocks are leading a broader market rally as investors pour money into companies developing artificial intelligence solutions.",
-      url: "#",
-      sentiment: "positive" as const,
-      impact: "medium" as const
-    },
-    {
-      title: "Oil Prices Fall on Concerns of Global Demand Slowdown",
-      source: "Reuters",
-      date: "8h ago",
-      summary: "Crude oil prices dropped on Wednesday as traders worried about slowing global economic growth and its potential impact on fuel demand.",
-      url: "#",
-      sentiment: "negative" as const,
-      impact: "medium" as const
-    },
-    {
-      title: "Major Retail Chain Announces Store Closures Amid Shift to Online Sales",
-      source: "CNBC",
-      date: "10h ago",
-      summary: "A leading retail chain announced plans to close 150 physical stores nationwide as it accelerates its digital transformation strategy.",
-      url: "#",
-      sentiment: "neutral" as const,
-      impact: "medium" as const
-    },
-    {
-      title: "Pharmaceutical Giant Receives FDA Approval for Breakthrough Drug",
-      source: "Wall Street Journal",
-      date: "12h ago",
-      summary: "A major pharmaceutical company received FDA approval for its groundbreaking treatment, potentially generating billions in revenue.",
-      url: "#",
-      sentiment: "positive" as const,
-      impact: "high" as const
-    },
-    {
-      title: "Central Bank of Europe Maintains Current Interest Rates",
-      source: "Reuters",
-      date: "1d ago",
-      summary: "The European Central Bank announced it would keep interest rates unchanged following its latest policy meeting, meeting market expectations.",
-      url: "#",
-      sentiment: "neutral" as const,
-      impact: "low" as const
-    },
-    {
-      title: "Major Cryptocurrency Exchange Faces Regulatory Scrutiny",
-      source: "CoinDesk",
-      date: "1d ago",
-      summary: "One of the world's largest cryptocurrency exchanges is under investigation by regulators for potential compliance violations.",
-      url: "#",
-      sentiment: "negative" as const,
-      impact: "high" as const
-    },
-    {
-      title: "Electric Vehicle Maker Exceeds Quarterly Delivery Expectations",
-      source: "Bloomberg",
-      date: "2d ago",
-      summary: "A leading electric vehicle manufacturer reported quarterly deliveries that surpassed analyst estimates, sending shares higher in pre-market trading.",
-      url: "#",
-      sentiment: "positive" as const,
-      impact: "medium" as const
+  const handleSearch = async () => {
+    setPage(1);
+    await fetchData();
+  };
+  
+  const handleLoadMore = async () => {
+    try {
+      setLoading(true);
+      const nextPage = page + 1;
+      const allData = await newsApi.fetchAllNewsData(searchQuery);
+      setNewsItems(prev => [...prev, ...allData.news.articles]);
+      setPage(nextPage);
+      setHasMore(allData.news.articles.length === 10);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more news. Please try again later.');
+      console.error('Error loading more news:', err);
+    } finally {
+      setLoading(false);
     }
-  ];
+  };
+
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    setRetryCount(0); // Reset retry count on manual refresh
+    fetchData();
+  };
+
+  const handleTimeFrameChange = (value: string) => {
+    setTimeFrame(value);
+    setPage(1);
+  };
   
   // Filter news based on search query
   const filteredNews = newsItems.filter(item => 
     item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    item.summary.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+    item.description.toLowerCase().includes(searchQuery.toLowerCase())
+  ).map(item => ({
+    title: item.title,
+    source: item.source.name,
+    date: new Date(item.publishedAt).toLocaleDateString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }),
+    summary: item.description,
+    url: item.url,
+    sentiment: item.sentiment || 'neutral',
+    impact: item.impact || 'medium'
+  }));
   
-  // Top trending topics based on AI analysis
-  const trendingTopics = [
-    { name: "Interest Rates", sentiment: "positive" },
-    { name: "Artificial Intelligence", sentiment: "positive" },
-    { name: "Tech Stocks", sentiment: "positive" },
-    { name: "Oil Prices", sentiment: "negative" },
-    { name: "Retail Industry", sentiment: "neutral" },
-  ];
-  
-  // Top impacted stocks
+  // Top impacted stocks (you might want to fetch this from a separate API)
   const impactedStocks = [
     { symbol: "NVDA", name: "NVIDIA Corp", impact: "positive", change: "+2.4%" },
     { symbol: "JPM", name: "JPMorgan Chase", impact: "positive", change: "+1.8%" },
@@ -145,9 +137,14 @@ const News = () => {
             </div>
             
             <div className="mt-4 md:mt-0 flex space-x-3">
-              <Button variant="outline" className="flex items-center">
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Data
+              <Button 
+                variant="outline" 
+                className="flex items-center"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
               </Button>
             </div>
           </div>
@@ -293,7 +290,7 @@ const News = () => {
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                       Time Period
                     </label>
-                    <Select defaultValue="24h">
+                    <Select value={timeFrame} onValueChange={handleTimeFrameChange}>
                       <SelectTrigger className="w-full bg-white dark:bg-finance-blue-dark">
                         <SelectValue placeholder="Select time period" />
                       </SelectTrigger>
@@ -423,6 +420,30 @@ const News = () => {
                   {[1, 2, 3, 4].map((i) => (
                     <div key={i} className="h-64 animate-pulse bg-gray-200 dark:bg-gray-800 rounded-xl"></div>
                   ))}
+                </div>
+              ) : error ? (
+                <div className="text-center py-12 border border-red-200 dark:border-red-800 rounded-xl bg-red-50 dark:bg-red-900/20">
+                  <div className="text-red-600 dark:text-red-400 mb-4">
+                    <svg className="h-12 w-12 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-red-900 dark:text-red-100 mb-2">Error Loading News</h3>
+                  <p className="text-red-700 dark:text-red-300 mb-4">{error}</p>
+                  {retryCount < 3 && (
+                    <Button 
+                      variant="outline" 
+                      className="text-red-700 dark:text-red-300 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      onClick={handleRefresh}
+                    >
+                      Try Again ({3 - retryCount} attempts remaining)
+                    </Button>
+                  )}
+                  {retryCount >= 3 && (
+                    <div className="text-sm text-red-600 dark:text-red-400 mt-2">
+                      Maximum retry attempts reached. Please check your internet connection or try again later.
+                    </div>
+                  )}
                 </div>
               ) : filteredNews.length === 0 ? (
                 <div className="text-center py-12 border border-gray-200 dark:border-gray-800 rounded-xl bg-white dark:bg-finance-blue">

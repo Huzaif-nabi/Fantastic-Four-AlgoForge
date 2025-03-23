@@ -1,57 +1,274 @@
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import StockChart from "@/components/StockChart";
+import TechStocksDashboard from "@/components/TechStocksDashboard";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, LineChart, BarChart2, Cpu, Calendar, ArrowRight, TrendingUp, TrendingDown, Layers } from 'lucide-react';
+import { Search, LineChart, BarChart2, Cpu, Calendar, ArrowRight, TrendingUp, TrendingDown, Layers, Info, Loader2, RefreshCw } from 'lucide-react';
+import { stockApi, StockData, TechnicalIndicator, FinancialMetric } from '@/services/stockApi';
+
+type Direction = "up" | "down" | "neutral";
+
+interface PredictionData {
+  direction: Direction;
+  probability: number;
+  change: string;
+}
 
 const StockAnalysis = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStock, setSelectedStock] = useState<string | null>('AAPL');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   
-  // Mock stock data
-  const stocks = [
-    { symbol: 'AAPL', name: 'Apple Inc.', sector: 'Technology', aiScore: 86 },
-    { symbol: 'MSFT', name: 'Microsoft Corporation', sector: 'Technology', aiScore: 91 },
-    { symbol: 'GOOGL', name: 'Alphabet Inc.', sector: 'Technology', aiScore: 84 },
-    { symbol: 'AMZN', name: 'Amazon.com Inc.', sector: 'Consumer Cyclical', aiScore: 82 },
-    { symbol: 'TSLA', name: 'Tesla Inc.', sector: 'Automotive', aiScore: 78 },
-  ];
+  // State for real-time data
+  const [stocks, setStocks] = useState<StockData[]>([]);
+  const [technicalIndicators, setTechnicalIndicators] = useState<TechnicalIndicator[]>([]);
+  const [financialMetrics, setFinancialMetrics] = useState<FinancialMetric[]>([]);
+  const [companyOverview, setCompanyOverview] = useState<any>(null);
   
-  // Mock prediction data
-  const predictionData = {
-    shortTerm: { direction: 'up', probability: 72, change: '+3.8%' },
-    mediumTerm: { direction: 'up', probability: 68, change: '+8.2%' },
-    longTerm: { direction: 'neutral', probability: 52, change: '+1.5%' },
+  // AI prediction based on technical indicators
+  const calculatePrediction = (indicators: TechnicalIndicator[]): PredictionData => {
+    let bullishCount = 0;
+    let totalIndicators = indicators.length;
+    
+    indicators.forEach(indicator => {
+      if (indicator.interpretation === 'Bullish') {
+        bullishCount++;
+      }
+    });
+    
+    const probability = (bullishCount / totalIndicators) * 100;
+    const direction: Direction = probability > 60 ? "up" : probability < 40 ? "down" : "neutral";
+    const change = direction === "up" ? "+2.5%" : direction === "down" ? "-1.8%" : "+0.3%";
+    
+    return {
+      direction,
+      probability,
+      change
+    };
   };
   
-  // Mock technical indicators
-  const technicalIndicators = [
-    { name: 'RSI', value: 62, interpretation: 'Neutral', details: 'Not overbought, room to run' },
-    { name: 'MACD', value: 'Positive', interpretation: 'Bullish', details: 'Recent crossover signals uptrend' },
-    { name: 'Moving Averages', value: '8/10', interpretation: 'Bullish', details: '8 of 10 MAs signal buy' },
-    { name: 'Bollinger Bands', value: 'Middle', interpretation: 'Neutral', details: 'Price near middle band' },
-  ];
+  // Fetch initial stock data with retry
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchInitialStocks = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const defaultSymbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
+        
+        const stockData = [];
+        for (const symbol of defaultSymbols) {
+          if (!mounted) break;
+          try {
+            const data = await stockApi.getStockQuote(symbol);
+            if (mounted) {
+              stockData.push(data);
+            }
+          } catch (err) {
+            console.error(`Error fetching ${symbol}:`, err);
+          }
+        }
+        
+        if (!mounted) return;
+
+        if (stockData.length === 0) {
+          throw new Error('Unable to fetch any stock data. Please try again later.');
+        }
+        
+        setStocks(stockData);
+        setRetryCount(0);
+        
+      } catch (err) {
+        if (!mounted) return;
+        const errorMessage = err instanceof Error ? err.message : 'Failed to fetch initial stock data';
+        setError(errorMessage);
+        setRetryCount(prev => prev + 1);
+        console.error(err);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+          setIsRefreshing(false);
+        }
+      }
+    };
+    
+    fetchInitialStocks();
+    return () => { mounted = false; };
+  }, []);
   
-  // Mock financial metrics
-  const financialMetrics = [
-    { name: 'P/E Ratio', value: '28.5', comparison: 'Above sector average of 25.3' },
-    { name: 'Revenue Growth', value: '12.4% YoY', comparison: 'Strong, above sector average' },
-    { name: 'Profit Margin', value: '22.8%', comparison: 'Excellent, top quartile for sector' },
-    { name: 'Debt-to-Equity', value: '1.25', comparison: 'Moderate leverage, manageable' },
-    { name: 'Cash Reserves', value: '$72.3B', comparison: 'Strong balance sheet' },
-  ];
+  // Fetch stock details when selected stock changes
+  useEffect(() => {
+    let mounted = true;
+
+    const fetchStockDetails = async () => {
+      if (!selectedStock) return;
+      
+      try {
+        setLoading(true);
+        setError(null);
+        
+        const [indicators, metrics, overview] = await Promise.all([
+          stockApi.getTechnicalIndicators(selectedStock),
+          stockApi.getFinancialMetrics(selectedStock),
+          stockApi.getCompanyDetails(selectedStock)
+        ]);
+        
+        if (!mounted) return;
+
+        setTechnicalIndicators(indicators);
+        setFinancialMetrics(metrics);
+        setCompanyOverview(overview);
+        setRetryCount(0);
+        
+      } catch (err) {
+        if (!mounted) return;
+        const errorMessage = err instanceof Error ? err.message : 'Failed to fetch stock details';
+        setError(errorMessage);
+        setRetryCount(prev => prev + 1);
+        console.error(err);
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    };
+    
+    fetchStockDetails();
+    return () => { mounted = false; };
+  }, [selectedStock]);
   
-  // Function to filter stocks based on search query
+  // Handle stock search with debounce
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+      const results = await stockApi.searchStocks(searchQuery);
+      
+      if (results.length === 0) {
+        setError(`No results found for "${searchQuery}"`);
+      } else {
+        // Get full stock data for each result
+        const fullData = await Promise.all(
+          results.map(result => stockApi.getStockQuote(result.symbol))
+        );
+        setStocks(fullData);
+        setError(null);
+      }
+      
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to search stocks';
+      setError(errorMessage);
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+  
+  // Handle refresh
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    setRetryCount(0);
+    if (selectedStock) {
+      const fetchStockDetails = async () => {
+        try {
+          const [quote, indicators, metrics, overview] = await Promise.all([
+            stockApi.getStockQuote(selectedStock),
+            stockApi.getTechnicalIndicators(selectedStock),
+            stockApi.getFinancialMetrics(selectedStock),
+            stockApi.getCompanyDetails(selectedStock)
+          ]);
+          
+          setStocks(prev => prev.map(s => s.symbol === selectedStock ? quote : s));
+          setTechnicalIndicators(indicators);
+          setFinancialMetrics(metrics);
+          setCompanyOverview(overview);
+          setError(null);
+          
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : 'Failed to refresh data';
+          setError(errorMessage);
+          console.error(err);
+        } finally {
+          setIsRefreshing(false);
+        }
+      };
+      
+      fetchStockDetails();
+    } else {
+      const defaultSymbols = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA'];
+      Promise.all(defaultSymbols.map(symbol => stockApi.getStockQuote(symbol)))
+        .then(stockData => {
+          setStocks(stockData);
+          setError(null);
+        })
+        .catch(err => {
+          const errorMessage = err instanceof Error ? err.message : 'Failed to refresh data';
+          setError(errorMessage);
+          console.error(err);
+        })
+        .finally(() => {
+          setIsRefreshing(false);
+        });
+    }
+  };
+  
+  // Calculate AI score based on technical indicators and financial metrics
+  const calculateAIScore = (): number => {
+    if (!technicalIndicators.length || !financialMetrics.length) return 0;
+    
+    let score = 50; // Base score
+    
+    // Add points for bullish technical indicators
+    technicalIndicators.forEach(indicator => {
+      if (indicator.interpretation === 'Bullish') score += 10;
+      if (indicator.interpretation === 'Bearish') score -= 10;
+    });
+    
+    // Add points for strong financial metrics
+    const peRatio = parseFloat(financialMetrics[0].value);
+    const profitMargin = parseFloat(financialMetrics[2].value);
+    
+    if (peRatio > 0 && peRatio < 30) score += 10;
+    if (profitMargin > 15) score += 10;
+    
+    return Math.min(Math.max(score, 0), 100); // Ensure score is between 0 and 100
+  };
+  
+  // Get investment recommendation based on AI score
+  const getInvestmentRecommendation = (score: number): string => {
+    if (score >= 80) return 'Strong Buy';
+    if (score >= 60) return 'Buy';
+    if (score >= 40) return 'Hold';
+    if (score >= 20) return 'Sell';
+    return 'Strong Sell';
+  };
+  
+  // Filter stocks based on search query
   const filteredStocks = stocks.filter(stock => 
     stock.symbol.toLowerCase().includes(searchQuery.toLowerCase()) || 
     stock.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  
+  // Calculate predictions based on technical indicators
+  const predictionData = {
+    shortTerm: calculatePrediction(technicalIndicators),
+    mediumTerm: { direction: "up" as Direction, probability: 68, change: '+8.2%' },
+    longTerm: { direction: "neutral" as Direction, probability: 52, change: '+1.5%' },
+  };
+  
+  const aiScore = calculateAIScore();
+  const recommendation = getInvestmentRecommendation(aiScore);
   
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-finance-blue-dark">
@@ -59,12 +276,67 @@ const StockAnalysis = () => {
       
       <main className="pt-20 pb-16">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="py-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center py-6">
+            <div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Stock Analysis</h1>
             <p className="text-gray-600 dark:text-gray-300 mt-1">
               AI-powered stock analysis and predictions
             </p>
           </div>
+            
+            <div className="mt-4 md:mt-0">
+              <Button 
+                variant="outline" 
+                className="flex items-center"
+                onClick={handleRefresh}
+                disabled={isRefreshing || loading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+              </Button>
+            </div>
+          </div>
+          
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                    Error
+                  </h3>
+                  <div className="mt-2 text-sm text-red-700 dark:text-red-300">
+                    <p>{error}</p>
+                  </div>
+                  {retryCount < 3 && (
+                    <div className="mt-4">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefresh}
+                        disabled={isRefreshing}
+                        className="text-red-700 dark:text-red-300 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        Try Again ({3 - retryCount} attempts remaining)
+                      </Button>
+                    </div>
+                  )}
+                  {retryCount >= 3 && (
+                    <p className="mt-2 text-sm text-red-700 dark:text-red-300">
+                      Maximum retry attempts reached. Please check your internet connection or try again later.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Add TechStocksDashboard here */}
+         
           
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
             {/* Stock Search Panel */}
@@ -79,15 +351,26 @@ const StockAnalysis = () => {
                     <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
                     <Input
                       type="search"
+                      id="stock-search"
+                      name="stock-search"
                       placeholder="Search by symbol or name..."
                       className="pl-9 w-full bg-white dark:bg-finance-blue-dark border-gray-200 dark:border-gray-800 rounded-lg"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                      aria-label="Search stocks"
                     />
                   </div>
                   
                   <div className="mt-4 space-y-2">
-                    {filteredStocks.map((stock) => (
+                    {loading ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 className="h-8 w-8 animate-spin text-finance-teal" />
+                      </div>
+                    ) : filteredStocks.length === 0 ? (
+                      <p className="text-center text-gray-500 py-4">No stocks found matching "{searchQuery}"</p>
+                    ) : (
+                      filteredStocks.map((stock) => (
                       <div 
                         key={stock.symbol}
                         className={`p-3 rounded-lg flex items-center justify-between cursor-pointer transition-colors duration-200 ${
@@ -108,14 +391,13 @@ const StockAnalysis = () => {
                             <p className="text-xs text-gray-500">{stock.name}</p>
                           </div>
                         </div>
-                        <div className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded">
-                          {stock.sector}
+                          <div className={`text-sm font-medium ${
+                            stock.change >= 0 ? 'text-finance-positive' : 'text-finance-negative'
+                          }`}>
+                            {stock.change >= 0 ? '+' : ''}{stock.changePercent.toFixed(2)}%
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    
-                    {filteredStocks.length === 0 && (
-                      <p className="text-center text-gray-500 py-4">No stocks found matching "{searchQuery}"</p>
+                      ))
                     )}
                   </div>
                 </CardContent>
@@ -145,7 +427,7 @@ const StockAnalysis = () => {
                         <CardContent>
                           <div className="flex flex-col items-center justify-center p-4">
                             <div className="relative w-32 h-32 mb-4">
-                              <svg className="w-full h-full" viewBox="0 0 100 100">
+                              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                                 <circle 
                                   className="text-gray-200 dark:text-gray-700 stroke-current" 
                                   strokeWidth="10" 
@@ -163,42 +445,45 @@ const StockAnalysis = () => {
                                   r="40" 
                                   fill="transparent"
                                   strokeDasharray="251.2"
-                                  strokeDashoffset={251.2 - (251.2 * (stocks.find(s => s.symbol === selectedStock)?.aiScore || 0)) / 100}
-                                  transform="rotate(-90 50 50)"
+                                  strokeDashoffset={251.2 - (251.2 * aiScore) / 100}
                                 ></circle>
                               </svg>
                               <div className="absolute inset-0 flex items-center justify-center">
-                                <span className="text-3xl font-bold">
-                                  {stocks.find(s => s.symbol === selectedStock)?.aiScore || 0}
-                                </span>
+                                <span className="text-3xl font-bold">{aiScore}</span>
                               </div>
                             </div>
                             
                             <div className="text-center">
                               <p className="text-gray-500 dark:text-gray-400 text-sm mb-2">Investment Attractiveness</p>
-                              <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                                Strong Buy
+                              <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                recommendation === 'Strong Buy' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
+                                recommendation === 'Buy' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' :
+                                recommendation === 'Hold' ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200' :
+                                recommendation === 'Sell' ? 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200' :
+                                'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                              }`}>
+                                {recommendation}
                               </div>
                             </div>
                           </div>
                           
+                          {companyOverview && (
                           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800">
                             <h4 className="font-medium mb-2">Key Strengths</h4>
                             <ul className="space-y-1 text-sm">
                               <li className="flex items-start">
                                 <TrendingUp className="h-4 w-4 text-finance-positive mr-2 mt-0.5" />
-                                <span>Strong revenue growth trajectory</span>
+                                <span>{companyOverview.name}</span>
                               </li>
+                              {companyOverview.sector && (
                               <li className="flex items-start">
                                 <TrendingUp className="h-4 w-4 text-finance-positive mr-2 mt-0.5" />
-                                <span>Market leader in core product categories</span>
+                                <span>Strong market position in {companyOverview.sector}</span>
                               </li>
-                              <li className="flex items-start">
-                                <TrendingUp className="h-4 w-4 text-finance-positive mr-2 mt-0.5" />
-                                <span>Robust R&D pipeline</span>
-                              </li>
+                              )}
                             </ul>
                           </div>
+                          )}
                         </CardContent>
                       </Card>
                     </div>
@@ -220,7 +505,7 @@ const StockAnalysis = () => {
                       </TabsTrigger>
                     </TabsList>
                     
-                    <TabsContent value="predictions" className="mt-2">
+                    <TabsContent value="predictions">
                       <Card className="border border-gray-200 dark:border-gray-800 hover:shadow-md transition-shadow duration-300">
                         <CardHeader>
                           <CardTitle className="flex items-center">
@@ -234,84 +519,45 @@ const StockAnalysis = () => {
                         <CardContent>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {Object.entries(predictionData).map(([term, data]) => (
-                              <div 
-                                key={term} 
-                                className="p-4 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-finance-blue"
-                              >
-                                <div className="flex justify-between items-start mb-4">
-                                  <h3 className="font-medium capitalize">
+                              <div key={term} className="space-y-4">
+                                <h3 className="font-medium text-lg capitalize">
                                     {term.replace(/([A-Z])/g, ' $1').trim()}
                                   </h3>
-                                  <div className={`flex items-center p-1.5 rounded-full ${
-                                    data.direction === 'up' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
-                                    data.direction === 'down' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
-                                    'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
+                                <div className="flex flex-col items-center">
+                                  <div className={`w-16 h-16 rounded-full flex items-center justify-center mb-4 ${
+                                    data.direction === 'up' ? 'bg-finance-positive' :
+                                    data.direction === 'down' ? 'bg-finance-negative' :
+                                    'bg-gray-400'
                                   }`}>
                                     {data.direction === 'up' ? (
-                                      <TrendingUp className="h-4 w-4" />
+                                      <TrendingUp className="h-8 w-8 text-white" />
                                     ) : data.direction === 'down' ? (
-                                      <TrendingDown className="h-4 w-4" />
+                                      <TrendingDown className="h-8 w-8 text-white" />
                                     ) : (
-                                      <ArrowRight className="h-4 w-4" />
+                                      <ArrowRight className="h-8 w-8 text-white" />
                                     )}
                                   </div>
-                                </div>
-                                
-                                <div className="flex items-center space-x-2 mb-2">
-                                  <Calendar className="h-4 w-4 text-gray-500" />
-                                  <span className="text-sm text-gray-600 dark:text-gray-300">
-                                    {term === 'shortTerm' ? '1-2 Weeks' :
-                                     term === 'mediumTerm' ? '1-3 Months' : '6-12 Months'}
-                                  </span>
-                                </div>
-                                
-                                <div className="flex items-end justify-between mb-2">
-                                  <div>
-                                    <div className="text-3xl font-bold mb-1">
-                                      {data.change}
-                                    </div>
+                                  <div className="text-2xl font-bold mb-1">{data.change}</div>
                                     <div className="text-sm text-gray-500">
-                                      Expected change
-                                    </div>
-                                  </div>
-                                  <div className="text-right">
-                                    <div className="text-lg font-medium">
-                                      {data.probability}%
-                                    </div>
-                                    <div className="text-sm text-gray-500">
-                                      Confidence
-                                    </div>
+                                    {data.probability.toFixed(0)}% Confidence
                                   </div>
                                 </div>
-                                
-                                <Progress 
-                                  value={data.probability} 
-                                  className="h-1.5 mt-2" 
-                                  indicatorClassName={
-                                    data.direction === 'up' ? 'bg-finance-positive' :
-                                    data.direction === 'down' ? 'bg-finance-negative' : 'bg-gray-500'
-                                  }
-                                />
                               </div>
                             ))}
-                          </div>
-                          
-                          <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm text-blue-800 dark:text-blue-200 flex items-start">
-                            <Info className="h-5 w-5 mr-2 flex-shrink-0 mt-0.5" />
-                            <p>
-                              Our AI models are continuously learning and adapting. Predictions are based on historical data, market trends, and sentiment analysis from news and social media. Past performance doesn't guarantee future results.
-                            </p>
                           </div>
                         </CardContent>
                       </Card>
                     </TabsContent>
                     
-                    <TabsContent value="technical" className="mt-2">
+                    <TabsContent value="technical">
                       <Card className="border border-gray-200 dark:border-gray-800 hover:shadow-md transition-shadow duration-300">
                         <CardHeader>
-                          <CardTitle>Technical Analysis</CardTitle>
+                          <CardTitle className="flex items-center">
+                            <BarChart2 className="mr-2 h-5 w-5 text-finance-teal" />
+                            Technical Analysis
+                          </CardTitle>
                           <CardDescription>
-                            Technical indicators and chart patterns
+                            Key technical indicators and their interpretations
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -319,70 +565,50 @@ const StockAnalysis = () => {
                             {technicalIndicators.map((indicator, index) => (
                               <div 
                                 key={index}
-                                className="p-4 border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-finance-blue"
+                                className="p-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-finance-blue"
                               >
-                                <div className="flex justify-between mb-2">
-                                  <h3 className="font-medium">{indicator.name}</h3>
-                                  <span className={`px-2 py-0.5 text-xs rounded-full ${
+                                <div className="flex justify-between items-start mb-2">
+                                  <h4 className="font-medium">{indicator.name}</h4>
+                                  <div className={`px-2 py-1 rounded text-xs font-medium ${
                                     indicator.interpretation === 'Bullish' ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' :
                                     indicator.interpretation === 'Bearish' ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' :
-                                    'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                                    'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200'
                                   }`}>
                                     {indicator.interpretation}
-                                  </span>
+                                  </div>
                                 </div>
-                                <div className="text-lg font-bold">{indicator.value}</div>
-                                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{indicator.details}</p>
+                                <div className="text-2xl font-bold mb-2">{indicator.value}</div>
+                                <p className="text-sm text-gray-500">{indicator.details}</p>
                               </div>
                             ))}
-                          </div>
-                          
-                          <div className="mt-6 text-center">
-                            <Button className="bg-finance-teal hover:bg-finance-teal-dark text-white">
-                              View Detailed Technical Analysis
-                            </Button>
                           </div>
                         </CardContent>
                       </Card>
                     </TabsContent>
                     
-                    <TabsContent value="fundamentals" className="mt-2">
+                    <TabsContent value="fundamentals">
                       <Card className="border border-gray-200 dark:border-gray-800 hover:shadow-md transition-shadow duration-300">
                         <CardHeader>
-                          <CardTitle>Fundamental Analysis</CardTitle>
+                          <CardTitle className="flex items-center">
+                            <Layers className="mr-2 h-5 w-5 text-finance-teal" />
+                            Fundamental Analysis
+                          </CardTitle>
                           <CardDescription>
-                            Financial metrics and company fundamentals
+                            Key financial metrics and company fundamentals
                           </CardDescription>
                         </CardHeader>
                         <CardContent>
-                          <div className="overflow-x-auto">
-                            <table className="w-full">
-                              <thead>
-                                <tr className="border-b border-gray-200 dark:border-gray-800">
-                                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Metric</th>
-                                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Value</th>
-                                  <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Context</th>
-                                </tr>
-                              </thead>
-                              <tbody>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {financialMetrics.map((metric, index) => (
-                                  <tr 
+                              <div 
                                     key={index}
-                                    className="border-b border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                                  >
-                                    <td className="py-3 px-4 font-medium">{metric.name}</td>
-                                    <td className="py-3 px-4">{metric.value}</td>
-                                    <td className="py-3 px-4 text-gray-600 dark:text-gray-300">{metric.comparison}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          
-                          <div className="mt-6 text-center">
-                            <Button className="bg-finance-teal hover:bg-finance-teal-dark text-white">
-                              View Full Financial Reports
-                            </Button>
+                                className="p-4 rounded-lg border border-gray-200 dark:border-gray-800 bg-white dark:bg-finance-blue"
+                              >
+                                <h4 className="font-medium mb-2">{metric.name}</h4>
+                                <div className="text-2xl font-bold mb-2">{metric.value}</div>
+                                <p className="text-sm text-gray-500">{metric.details}</p>
+                              </div>
+                            ))}
                           </div>
                         </CardContent>
                       </Card>
@@ -390,15 +616,9 @@ const StockAnalysis = () => {
                   </Tabs>
                 </>
               ) : (
-                <Card className="border border-gray-200 dark:border-gray-800">
-                  <CardContent className="flex flex-col items-center justify-center p-12">
-                    <LineChart className="h-16 w-16 text-gray-400 mb-4" />
-                    <h3 className="text-xl font-medium mb-2">No Stock Selected</h3>
-                    <p className="text-gray-500 dark:text-gray-400 text-center mb-4">
-                      Select a stock from the list to view detailed analysis
-                    </p>
-                  </CardContent>
-                </Card>
+                <div className="text-center py-12">
+                  <p className="text-gray-500">Select a stock to view analysis</p>
+                </div>
               )}
             </div>
           </div>
@@ -411,3 +631,5 @@ const StockAnalysis = () => {
 };
 
 export default StockAnalysis;
+
+export type { Direction, PredictionData, TechnicalIndicator };
